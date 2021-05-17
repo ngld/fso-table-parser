@@ -1,0 +1,44 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "FSO Tables",
+	"patterns": [
+		{
+			"include": "#root"
+		}
+	],
+	"repository": {
+		"root": {
+			"patterns": [{
+				"name": "variable.label.fso-table",
+				"match": "[#$+][a-zA-Z0-9 _]+:?"
+			}, {
+				"name": "comment.line.double-dash.fso-table",
+				"match": "^;.*\n"
+			}, {
+				"name": "comment.block.fso-table",
+				"begin": "/\\*",
+				"end": "\\*/"
+			}, {
+				"name": "keyword.operator.fso-table",
+				"match": ","
+			}, {
+				"name": "keyword.control.fso-table",
+				"match": "(?:[)(]|XSTR|\\$end_multi_text)"
+			}, {
+				"name": "constant.numeric.fso-table",
+				"match": "\\b[0-9]+(?:\\.[0-9]+)?\\b"
+			}, {
+				"name": "string.quoted.double.fso-table",
+				"begin": "\"",
+				"end": "\"",
+				"patterns": [
+					{
+						"name": "constant.character.escape.fso-table",
+						"match": "\\\\."
+					}
+				]
+			}]
+		}
+	},
+	"scopeName": "source.fso-table"
+}
