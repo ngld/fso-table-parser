@@ -1,8 +1,13 @@
 {
     "name": "fso-tables",
+    "publisher": "ngld",
     "displayName": "FSO Tables",
     "description": "",
     "version": "0.0.1",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ngld/fso-table-parser"
+    },
     "engines": {
         "vscode": "^1.56.0"
     },
@@ -36,19 +41,37 @@
                 "path": "./syntaxes/fso-table.tmLanguage.json"
             }
         ],
-        "commands": [{
-            "command": "fso-tables.restart",
-            "title": "Restart FSO Tables LSP"
-        }]
+        "commands": [
+            {
+                "command": "fso-tables.restart",
+                "title": "FSO Tables: Restart LSP"
+            }
+        ],
+        "configuration": [
+            {
+                "title": "FSO Tables",
+                "properties": {
+                    "fso-tables.lspBin": {
+                        "type": "string",
+                        "default": null,
+                        "markdownDescription": "Path to the LSP binary [which you can download from GitHub](https://github.com/ngld/fso-table-parser/releases/latest). If you change this setting, use the `FSO Tables: Restart LSP` command or restart VSCode."
+                    }
+                }
+            }
+        ]
     },
     "scripts": {
-        "vscode:prepublish": "compile",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./"
+        "vscode:prepublish": "yarn compile --minify",
+        "compile": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+        "watch": "yarn compile --watch",
+        "list": "node ./vsce-yarn2-fix.js"
     },
     "dependencies": {
+        "@types/fs-extra": "^9.0.11",
         "@types/node": "^15.3.0",
         "@types/vscode": "^1.56.0",
+        "esbuild": "^0.12.0",
+        "fs-extra": "^10.0.0",
         "typescript": "^4.2.4",
         "vscode-languageclient": "^7.0.0"
     }

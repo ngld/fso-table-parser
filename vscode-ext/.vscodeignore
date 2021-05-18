@@ -1,4 +1,10 @@
-.vscode/**
-.vscode-test/**
-.gitignore
-vsc-extension-quickstart.md
+.yarn/
+.yarnrc.yml
+.pnp.js
+*.map
+vsce-yarn2-fix.js
+server
+server.exe
+
+src/
+tsconfig.json
