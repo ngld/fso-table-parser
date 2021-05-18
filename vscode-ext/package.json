@@ -2,7 +2,7 @@
     "name": "fso-tables",
     "publisher": "ngld",
     "displayName": "FSO Tables",
-    "description": "",
+    "description": "Syntax highlighting and further support for .tbl and .tbm files",
     "version": "0.0.1",
     "repository": {
         "type": "git",
