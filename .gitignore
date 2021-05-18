@@ -1,7 +1,9 @@
 test.tbl
+*.pprof
 vscode-ext/server
 vscode-ext/.yarn/*
 !vscode-ext/.yarn/releases
 !vscode-ext/.yarn/plugins
 !vscode-ext/.yarn/sdks
 node_modules
+vscode-ext/out
