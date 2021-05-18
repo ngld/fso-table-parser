@@ -23,7 +23,7 @@
 				"match": ","
 			}, {
 				"name": "keyword.control.fso-table",
-				"match": "(?:[)(]|XSTR|YES|NO|yes|no|\\$end_multi_text)"
+				"match": "\b(?:[)(]|XSTR|YES|NO|yes|no|\\$end_multi_text)\b"
 			}, {
 				"name": "constant.numeric.fso-table",
 				"match": "\\b[0-9]+(?:\\.[0-9]+)?\\b"
