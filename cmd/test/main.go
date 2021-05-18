@@ -1,12 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"runtime/pprof"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/ngld/fso-table-parser/pkg/parser"
 	"github.com/ngld/fso-table-parser/pkg/structs"
 	"github.com/rotisserie/eris"
@@ -18,6 +19,12 @@ func main() {
 		panic(err)
 	}
 
+	f, err := os.Create("profile.pprof")
+	if err != nil {
+		panic(err)
+	}
+	pprof.StartCPUProfile(f)
+
 	defer func() {
 		r := recover()
 		if r != nil {
@@ -26,15 +33,21 @@ func main() {
 		}
 	}()
 
-	lexer := parser.NewLexer(strings.NewReader(string(data)))
+	lexer := parser.NewLexer(context.Background(), strings.NewReader(string(data)))
 	containers := structs.NewTestTable()
 	for _, container := range containers {
-		result, err := container.Parse(lexer)
+		_, err := container.Parse(lexer)
 		if err != nil {
 			fmt.Println(eris.ToString(err, true))
-			os.Exit(1)
+			// os.Exit(1)
 		}
 
-		spew.Dump(result)
+		// spew.Dump(result)
+	}
+
+	pprof.StopCPUProfile()
+
+	for _, err := range lexer.Errors() {
+		fmt.Println(eris.ToString(err, true))
 	}
 }

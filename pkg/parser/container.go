@@ -12,7 +12,7 @@ type ParseItem interface {
 
 type ContainerChild interface {
 	ParseItem
-	GetName() string
+	GetNames() []string
 }
 
 type ContainerItem struct {
@@ -27,9 +27,13 @@ type ContainerItem struct {
 
 var _ ParseItem = (*ContainerItem)(nil)
 
-func (c ContainerItem) GetName() string { return c.Name }
+func (c ContainerItem) GetNames() []string { return []string{c.Name} }
 
 func (c ContainerItem) Parse(lex *Lexer) (interface{}, error) {
+	if lex.ctx.Err() != nil {
+		return nil, lex.ctx.Err()
+	}
+
 	if c.Multi {
 		result := make([]interface{}, 0)
 		required := c.Required
@@ -64,7 +68,8 @@ func (c ContainerItem) ParseOne(lex *Lexer, required bool) (interface{}, error) 
 		return c.Value.Parse(lex)
 	}
 
-	token, err := lex.Peek()
+	lex.PushPosition()
+	token, err := lex.Next()
 	if err != nil {
 		return nil, err
 	}
@@ -83,26 +88,26 @@ func (c ContainerItem) ParseOne(lex *Lexer, required bool) (interface{}, error) 
 
 	if required {
 		if token.Type != tt {
+			lex.PopPosition()
 			return nil, token.Errorf("Unexpected token %v. Expected %v", token.Type, tt)
 		}
 
 		if !strings.EqualFold(token.Content, c.Name[1:]) {
+			lex.PopPosition()
 			return nil, token.Errorf("Unexpected label %s. Expected %s", token.Content, c.Name)
 		}
 	} else {
 		if token.Type != tt || !strings.EqualFold(token.Content, c.Name[1:]) {
+			lex.PopPosition()
 			return nil, nil
 		}
 
 		if c.DeprecatedMessage != "" {
+			lex.DropPosition()
 			return nil, token.Errorf("%s", c.DeprecatedMessage)
 		}
 	}
-
-	err = lex.Consume()
-	if err != nil {
-		return nil, err
-	}
+	lex.DropPosition()
 
 	if c.Value != nil {
 		return c.Value.Parse(lex)
@@ -119,14 +124,60 @@ func (c ContainerItem) ParseOne(lex *Lexer, required bool) (interface{}, error) 
 		}
 	}
 
+	knownFields := make(map[string]bool)
+	for _, prop := range c.Properties {
+		for _, name := range prop.GetNames() {
+			knownFields[strings.ToLower(name)] = true
+		}
+	}
+
+	singlesSeen := make(map[string]bool)
 	result := make(map[string]interface{})
 	for _, prop := range c.Properties {
+		var token Token
+		lex.PushPosition()
+		for {
+			token, err = lex.Next()
+			// spew.Dump(token)
+			if err == nil && token.GetLabel() != "" && singlesSeen[token.GetLabel()] {
+				lex.Report(token.Errorf("Duplicate property %s", token.GetLabel()))
+				lex.readLine()
+				lex.Next()
+				lex.DropPosition()
+				lex.PushPosition()
+			} else {
+				break
+			}
+		}
+		lex.PopPosition()
+
 		val, err := prop.Parse(lex)
 		if err != nil {
-			return nil, err
+			lex.Report(err)
+			// If we're not at the start of a new line, skip the rest of the current line
+			if lex.col > 0 {
+				lex.readLine()
+			}
+
+			// Skip any fields
+			continue
 		}
 
-		result[prop.GetName()] = val
+		if val != nil {
+			if _, isSlice := val.([]interface{}); !isSlice {
+				singlesSeen[token.GetLabel()] = true
+			}
+
+			if c.DeprecatedMessage != "" {
+				lex.Report(token.Errorf("%s", c.DeprecatedMessage))
+			}
+
+			/*lex.addScopeInfo(token, ScopeInfo{
+				HoverText: fmt.Sprintf("%+v", val),
+			})*/
+
+			result[token.GetLabel()] = val
+		}
 	}
 
 	if c.Name[0] == '#' {

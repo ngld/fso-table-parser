@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -29,41 +30,130 @@ type Token struct {
 	Type     TokenType
 }
 
-func (t Token) Errorf(msg string, args ...interface{}) error {
-	return eris.Wrap(NewParserError(fmt.Sprintf(msg, args...), t.Location), "")
+func (t Token) Range() [4]int {
+	start := t.Location
+	lines := strings.Split(t.Content, "\n")
+	chars := start[1] + len(t.Content)
+
+	if len(lines) > 1 {
+		chars = len(lines[len(lines)-1])
+	}
+	return [4]int{start[0], start[1], start[0] + len(lines) - 1, chars}
 }
 
-type Lexer struct {
-	buffer io.RuneScanner
-	next   *Token
+func (t Token) Errorf(msg string, args ...interface{}) error {
+	codeRange := t.Range()
+	return eris.Wrap(NewParserError(fmt.Sprintf(msg, args...), codeRange), "")
+}
+
+func (t Token) GetLabel() string {
+	switch t.Type {
+	case HashLabel:
+		return "#" + t.Content
+	case DollarLabel:
+		return "$" + t.Content
+	case PlusLabel:
+		return "+" + t.Content
+	default:
+		return ""
+	}
+}
+
+type Scanner interface {
+	io.RuneScanner
+	io.Seeker
+}
+
+type savedPos struct {
+	stream int64
 	line   int
 	col    int
 }
 
-func NewLexer(buffer io.RuneScanner) *Lexer {
-	return &Lexer{buffer: buffer}
+type ScopeInfo struct {
+	HoverText string
+	Start     [2]int
+	End       [2]int
+}
+
+type Lexer struct {
+	ctx        context.Context
+	buffer     Scanner
+	next       *Token
+	errors     []error
+	warnings   []error
+	scopeInfos []ScopeInfo
+	posStack   []savedPos
+	line       int
+	col        int
+}
+
+func NewLexer(ctx context.Context, buffer Scanner) *Lexer {
+	return &Lexer{ctx: ctx, buffer: buffer}
 }
 
 func (l *Lexer) errorf(msg string, args ...interface{}) error {
-	return eris.Wrap(NewParserError(fmt.Sprintf(msg, args...), [2]int{l.line + 1, l.col}), "")
+	return eris.Wrap(NewParserError(fmt.Sprintf(msg, args...), [4]int{l.line + 1, l.col - 1, l.line + 1, l.col}), "")
 }
 
-func (l *Lexer) Peek() (Token, error) {
-	if l.next == nil {
-		err := l.readToken()
-		if err != nil {
-			return Token{}, err
-		}
+func (l *Lexer) addScopeInfo(token Token, info ScopeInfo) {
+	codeRange := token.Range()
+	info.Start = [2]int{codeRange[0], codeRange[1]}
+	info.End = [2]int{codeRange[2], codeRange[3]}
+
+	l.scopeInfos = append(l.scopeInfos, info)
+}
+
+func (l *Lexer) Errors() []error {
+	return l.errors
+}
+
+func (l *Lexer) Warnings() []error {
+	return l.warnings
+}
+
+func (l *Lexer) ScopeInfos() []ScopeInfo {
+	return l.scopeInfos
+}
+
+func (l *Lexer) Report(e error) {
+	l.errors = append(l.errors, e)
+}
+
+func (l *Lexer) ReportWarning(e error) {
+	l.warnings = append(l.warnings, e)
+}
+
+func (l *Lexer) PushPosition() {
+	streamPos, err := l.buffer.Seek(0, io.SeekCurrent)
+	if err != nil {
+		l.Report(err)
+		return
 	}
 
-	for l.next.Type == Comment {
-		err := l.readToken()
-		if err != nil {
-			return Token{}, err
-		}
-	}
+	l.posStack = append(l.posStack, savedPos{
+		stream: streamPos,
+		line:   l.line,
+		col:    l.col,
+	})
+}
 
-	return *l.next, nil
+func (l *Lexer) PopPosition() {
+	stackSize := len(l.posStack)
+	frame := l.posStack[stackSize-1]
+	l.posStack = l.posStack[:stackSize-1]
+
+	_, err := l.buffer.Seek(frame.stream, io.SeekStart)
+	if err != nil {
+		l.Report(err)
+	}
+	l.line = frame.line
+	l.col = frame.col
+}
+
+func (l *Lexer) DropPosition() {
+	stackSize := len(l.posStack)
+	l.posStack = l.posStack[:stackSize-1]
 }
 
 func (l *Lexer) Next() (Token, error) {
@@ -86,22 +176,10 @@ func (l *Lexer) Next() (Token, error) {
 	return *result, nil
 }
 
-func (l *Lexer) Consume() error {
-	if l.next == nil {
-		_, err := l.Next()
-		return err
-	}
-
-	/*fmt.Print("Consuming: ")
-	spew.Dump(l.next)*/
-	l.next = nil
-	return nil
-}
-
 func (l *Lexer) ReadMultilineText(end string) (string, error) {
-	result := ""
+	result := make([]rune, 0, 200)
 	if l.next != nil {
-		result += l.next.Content
+		result = append(result, []rune(l.next.Content)...)
 		l.next = nil
 	} else {
 		char, _, err := l.buffer.ReadRune()
@@ -138,17 +216,17 @@ func (l *Lexer) ReadMultilineText(end string) (string, error) {
 			if string(char) == end[endpos:endpos+size] {
 				endpos += size
 				if endpos >= len(end) {
-					return result, nil
+					return string(result), nil
 				}
 			} else {
-				result += end[:endpos]
+				result = append(result, []rune(end[:endpos])...)
 				endpos = -1
 			}
 		} else {
 			if char == '$' {
 				endpos = 1
 			} else {
-				result += string(char)
+				result = append(result, char)
 			}
 		}
 	}
@@ -172,6 +250,11 @@ func (l *Lexer) Expect(tt TokenType, content string) error {
 }
 
 func (l *Lexer) readToken() error {
+	if l.ctx.Err() != nil {
+		return l.ctx.Err()
+	}
+
+	l.PushPosition()
 	char, _, err := l.buffer.ReadRune()
 	if err != nil {
 		return err
@@ -180,50 +263,54 @@ func (l *Lexer) readToken() error {
 
 	switch char {
 	case '#':
-		return l.readHashLabel()
+		err = l.readHashLabel()
 	case '$':
-		return l.readSimpleLabel(DollarLabel)
+		err = l.readSimpleLabel(DollarLabel)
 	case '+':
-		return l.readSimpleLabel(PlusLabel)
+		err = l.readSimpleLabel(PlusLabel)
 	case '"':
-		return l.readString()
-	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		err = l.readString()
+	case '-', '.', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		l.col--
-		if err = l.buffer.UnreadRune(); err != nil {
-			return err
+		if err = l.buffer.UnreadRune(); err == nil {
+			err = l.readNumber()
 		}
-
-		return l.readNumber()
 	case ';':
-		return l.readLineComment()
+		err = l.readLineComment()
 	case '/':
 		char, _, err = l.buffer.ReadRune()
-		if err != nil {
-			return err
+		if err == nil {
+			if char == '*' {
+				l.col++
+				err = l.readBlockComment()
+			}
+			if err == nil {
+				l.buffer.UnreadRune()
+				err = l.errorf("Unrecognised token %s", string(char))
+			}
 		}
-
-		if char == '*' {
-			l.col++
-			return l.readBlockComment()
-		}
-		l.buffer.UnreadRune()
-		return l.errorf("Unrecognised token %s", string(char))
-
 	case ' ', '\t', '\r', '\n':
 		err = l.buffer.UnreadRune()
-		if err != nil {
-			return err
-		}
-		l.col--
+		if err == nil {
+			l.col--
 
-		err := l.skipWhitespace()
-		if err != nil {
-			return err
+			err = l.skipWhitespace()
+			if err == nil {
+				err = l.readToken()
+			}
 		}
-		return l.readToken()
 	default:
+		l.DropPosition()
 		return l.errorf("Unrecognised token %s", string(char))
 	}
+
+	if err == nil {
+		l.DropPosition()
+	} else {
+		l.PopPosition()
+	}
+
+	return err
 }
 
 func (l *Lexer) makeToken(tt TokenType) {
@@ -256,6 +343,36 @@ func (l *Lexer) skipWhitespace() error {
 }
 
 func (l *Lexer) readUntil(stopchars string) (string, error) {
+	result := make([]rune, 0, 100)
+	for {
+		char, _, err := l.buffer.ReadRune()
+		if err != nil {
+			if err == io.EOF && len(result) > 0 {
+				return string(result), nil
+			}
+
+			return "", err
+		}
+
+		if strings.ContainsRune(stopchars, char) {
+			err = l.buffer.UnreadRune()
+			if err != nil {
+				return "", err
+			}
+			return string(result), nil
+		}
+
+		if char == '\n' {
+			l.line++
+			l.col = 0
+		} else {
+			l.col++
+		}
+		result = append(result, char)
+	}
+}
+
+func (l *Lexer) readOnly(allowchars string) (string, error) {
 	result := ""
 	for {
 		char, _, err := l.buffer.ReadRune()
@@ -267,7 +384,7 @@ func (l *Lexer) readUntil(stopchars string) (string, error) {
 			return "", err
 		}
 
-		if strings.ContainsRune(stopchars, char) {
+		if !strings.ContainsRune(allowchars, char) {
 			err = l.buffer.UnreadRune()
 			if err != nil {
 				return "", err
@@ -331,7 +448,7 @@ func (l *Lexer) optionalRune(r rune) (bool, error) {
 
 func (l *Lexer) readHashLabel() error {
 	l.makeToken(HashLabel)
-	label, err := l.readUntil("\t\n:;")
+	label, err := l.readUntil("\r\t\n:;")
 	if err != nil {
 		l.next = nil
 		return err
@@ -342,14 +459,12 @@ func (l *Lexer) readHashLabel() error {
 		l.next.Type = HashEnd
 	}
 	l.next.Content = label
-
-	_, err = l.optionalRune(':')
-	return err
+	return nil
 }
 
 func (l *Lexer) readSimpleLabel(tt TokenType) error {
 	l.makeToken(tt)
-	label, err := l.readUntil("\t\n:;")
+	label, err := l.readUntil("\r\t\n:;")
 	if err != nil {
 		l.next = nil
 		return err
@@ -416,19 +531,14 @@ func (l *Lexer) readBlockComment() error {
 }
 
 func (l *Lexer) readLine() error {
-	err := l.skipWhitespace()
-	if err != nil {
-		return err
-	}
-
 	l.makeToken(Line)
-	content, err := l.readUntil("\n\t")
+	content, err := l.readUntil(";\r\n")
 	if err != nil {
 		l.next = nil
 		return err
 	}
 
-	l.next.Content = strings.Trim(content, " ")
+	l.next.Content = strings.Trim(content, " \t")
 	return nil
 }
 
@@ -439,7 +549,7 @@ func (l *Lexer) readWord() error {
 	}
 
 	l.makeToken(String)
-	content, err := l.readUntil(",\n\t ")
+	content, err := l.readUntil(",\r\n\t ")
 	if err != nil {
 		l.next = nil
 		return err
@@ -468,19 +578,26 @@ func (l *Lexer) readString() error {
 
 func (l *Lexer) readNumber() error {
 	l.makeToken(Number)
-	content, err := l.readUntil("(),\" \n\t")
+	content, err := l.readOnly("0123456789.-")
 	if err != nil {
 		l.next = nil
 		return err
 	}
 
+	if len(content) == 0 {
+		return l.errorf("Exepcted a number")
+	}
+
+	if content[0] == '.' {
+		content = "0" + content
+	}
 	l.next.Content = content
 	return nil
 }
 
 func (l *Lexer) ReadList(cb func() error) error {
 	if l.next != nil {
-		return eris.New("Can't parse a list if another token has already been queued")
+		return l.errorf("Can't parse a list if another token has already been queued")
 	}
 
 	var err error

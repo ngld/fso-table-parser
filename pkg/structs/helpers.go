@@ -51,7 +51,7 @@ func StringFlagsValue(name string, flags ...string) parser.ContainerItem {
 	return parser.ContainerItem{
 		Name: name,
 		Value: parser.ValueList{
-			ValueParser: parser.StringValue,
+			ValueParser: parser.StringFlag,
 		},
 	}
 }
@@ -146,6 +146,20 @@ func VoidValue(name string) parser.ContainerItem {
 	return parser.ContainerItem{Name: name}
 }
 
+func SubsystemValue(name string) parser.ContainerItem {
+	return parser.ContainerItem{
+		Name:  name,
+		Value: parser.SubsystemValue,
+	}
+}
+
+func WeaponBanksValue(name string) parser.ContainerItem {
+	return parser.ContainerItem{
+		Name:  name,
+		Value: parser.WeaponBankList,
+	}
+}
+
 func Either(items ...parser.ContainerChild) parser.ContainerChild {
 	return &parser.SwitchItem{Items: items}
 }
@@ -171,6 +185,15 @@ func Nocreate() parser.ContainerItem {
 
 func Join(containers ...[]parser.ContainerItem) []parser.ContainerItem {
 	result := make([]parser.ContainerItem, 0)
+	for _, part := range containers {
+		result = append(result, part...)
+	}
+
+	return result
+}
+
+func JoinChildren(containers ...[]parser.ContainerChild) []parser.ContainerChild {
+	result := make([]parser.ContainerChild, 0)
 	for _, part := range containers {
 		result = append(result, part...)
 	}
