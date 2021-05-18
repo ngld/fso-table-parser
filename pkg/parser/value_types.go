@@ -6,13 +6,19 @@ import (
 )
 
 type SwitchItem struct {
-	name  string
 	Items []ContainerChild
 }
 
 var _ ContainerChild = (*SwitchItem)(nil)
 
-func (i SwitchItem) GetName() string { return i.name }
+func (i SwitchItem) GetNames() []string {
+	names := make([]string, 0, len(i.Items))
+	for _, item := range i.Items {
+		names = append(names, item.GetNames()...)
+	}
+
+	return names
+}
 
 func (i *SwitchItem) Parse(lex *Lexer) (interface{}, error) {
 	var value interface{}
@@ -21,7 +27,6 @@ func (i *SwitchItem) Parse(lex *Lexer) (interface{}, error) {
 	for _, item := range i.Items {
 		value, err = item.Parse(lex)
 		if err == nil && value != nil {
-			i.name = item.GetName()
 			return value, nil
 		}
 	}
@@ -92,20 +97,18 @@ func newGenericValueType(handler parseHandler) genericValueType {
 }
 
 func consumeValue(lex *Lexer) (Token, error) {
-	token, err := lex.Peek()
+	lex.PushPosition()
+	token, err := lex.Next()
 	if err != nil {
 		return Token{}, err
 	}
 
 	if token.Type != Line && token.Type != Number && token.Type != String {
+		lex.PopPosition()
 		return Token{}, token.Errorf("Expected value but got %v", token.Type)
 	}
 
-	err = lex.Consume()
-	if err != nil {
-		return Token{}, err
-	}
-
+	lex.DropPosition()
 	return token, nil
 }
 
@@ -127,6 +130,12 @@ var StringValue = newGenericValueType(func(lex *Lexer) (interface{}, error) {
 })
 
 var StringFlag = newGenericValueType(func(lex *Lexer) (interface{}, error) {
+	// Force the lexer to read a string
+	err := lex.readString()
+	if err != nil {
+		return nil, err
+	}
+
 	token, err := consumeValue(lex)
 	if err != nil {
 		return nil, err
@@ -161,8 +170,8 @@ var MultilineStringValue = newGenericValueType(func(l *Lexer) (interface{}, erro
 })
 
 var BooleanValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
-	// Force the lexer to read a line
-	err := l.readLine()
+	// Force the lexer to read a word
+	err := l.readWord()
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +192,15 @@ var BooleanValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
 })
 
 var FloatValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
+	if err := l.skipWhitespace(); err != nil {
+		return nil, err
+	}
+
+	// Force lexer to read a number
+	if err := l.readNumber(); err != nil {
+		return nil, err
+	}
+
 	token, err := consumeValue(l)
 	if err != nil {
 		return nil, err
@@ -197,6 +215,15 @@ var FloatValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
 })
 
 var IntegerValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
+	if err := l.skipWhitespace(); err != nil {
+		return nil, err
+	}
+
+	// Force lexer to read a number
+	if err := l.readNumber(); err != nil {
+		return nil, err
+	}
+
 	token, err := consumeValue(l)
 	if err != nil {
 		return nil, err
@@ -216,38 +243,35 @@ var FlagValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
 })
 
 var Vec3dValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
-	// Force the lexer to read a line
-	err := l.readLine()
-	if err != nil {
-		return nil, err
-	}
+	result := []float64{0, 0, 0}
+	for idx := range result {
+		if err := l.skipWhitespace(); err != nil {
+			return nil, err
+		}
 
-	token, err := consumeValue(l)
-	if err != nil {
-		return nil, err
-	}
+		if _, err := l.optionalRune(','); err != nil {
+			return nil, err
+		}
 
-	parts := strings.Split(strings.ReplaceAll(token.Content, ",", ""), " ")
-	if len(parts) != 3 {
-		return nil, token.Errorf("Expected vec3d but found %d parts", len(parts))
-	}
+		// Force the lexer to read a word
+		err := l.readWord()
+		if err != nil {
+			return nil, err
+		}
 
-	a, err := strconv.ParseFloat(parts[0], 64)
-	if err != nil {
-		return nil, token.Errorf("Failed to parse float %s (%v)", parts[0], err)
-	}
+		token, err := l.Next()
+		if err != nil {
+			return nil, err
+		}
 
-	b, err := strconv.ParseFloat(parts[1], 64)
-	if err != nil {
-		return nil, token.Errorf("Failed to parse float %s (%v)", parts[1], err)
-	}
+		value, err := strconv.ParseFloat(token.Content, 64)
+		if err != nil {
+			return nil, token.Errorf("Failed to parse float %s (%v)", token.Content, err)
+		}
 
-	c, err := strconv.ParseFloat(parts[2], 64)
-	if err != nil {
-		return nil, token.Errorf("Failed to parse float %s (%v)", parts[2], err)
+		result[idx] = value
 	}
-
-	return []float64{a, b, c}, nil
+	return result, nil
 })
 
 var ColorValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
@@ -287,4 +311,127 @@ var ColorValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
 	}
 
 	return []int{a, b, c}, nil
+})
+
+type Subsystem struct {
+	Name       string
+	HitPercent float64
+	TurnRate   float64
+}
+
+var SubsystemValue = newGenericValueType(func(l *Lexer) (interface{}, error) {
+	data, err := l.readUntil(",\n")
+	if err != nil {
+		return nil, err
+	}
+
+	result := Subsystem{
+		Name: strings.Trim(data, " \t"),
+	}
+
+	found, err := l.optionalRune(',')
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		return result, nil
+	}
+
+	l.PushPosition()
+	token, err := l.Next()
+	if err != nil {
+		return nil, err
+	}
+
+	if token.Type != Number {
+		l.PopPosition()
+		return result, nil
+	}
+
+	l.DropPosition()
+	result.HitPercent, err = strconv.ParseFloat(token.Content, 64)
+	if err != nil {
+		return nil, token.Errorf("Failed to parse hit percent %s (%s)", token.Content, err)
+	}
+
+	found, err = l.optionalRune(',')
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		return result, nil
+	}
+
+	l.PushPosition()
+	token, err = l.Next()
+	if err != nil {
+		return nil, err
+	}
+
+	if token.Type != Number {
+		l.PopPosition()
+		return result, nil
+	}
+	l.DropPosition()
+
+	result.TurnRate, err = strconv.ParseFloat(token.Content, 64)
+	if err != nil {
+		return nil, token.Errorf("Failed to parse turn rate %s (%s)", token.Content, err)
+	}
+
+	return result, nil
+})
+
+var WeaponBankList = newGenericValueType(func(l *Lexer) (interface{}, error) {
+	banks := make([][]string, 0, 2)
+	for {
+		if err := l.skipWhitespace(); err != nil {
+			return nil, err
+		}
+
+		found, err := l.optionalRune('(')
+		if err != nil {
+			return nil, err
+		}
+
+		if !found {
+			break
+		}
+
+		b := make([]string, 0)
+		for {
+			if err := l.skipWhitespace(); err != nil {
+				return nil, err
+			}
+
+			found, err := l.optionalRune('"')
+			if err != nil {
+				return nil, err
+			}
+
+			if !found {
+				break
+			}
+
+			value, err := l.readUntil("\"")
+			if err != nil {
+				return nil, err
+			}
+
+			b = append(b, value)
+
+			if err = l.requireRune('"'); err != nil {
+				return nil, err
+			}
+		}
+
+		banks = append(banks, b)
+		if err = l.requireRune(')'); err != nil {
+			return nil, err
+		}
+	}
+
+	return banks, nil
 })
