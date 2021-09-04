@@ -176,7 +176,17 @@ func (c ContainerItem) ParseOne(lex *Lexer, required bool) (interface{}, error) 
 				HoverText: fmt.Sprintf("%+v", val),
 			})*/
 
-			result[token.GetLabel()] = val
+			isZero := false
+			switch val := val.(type) {
+			case string:
+				isZero = val == ""
+			case []interface{}:
+				isZero = len(val) == 0
+			}
+
+			if !isZero {
+				result[token.GetLabel()] = val
+			}
 		}
 	}
 

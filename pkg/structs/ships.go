@@ -458,8 +458,8 @@ func NewShipsTable() []parser.ContainerItem {
 					StringListValue("$Glowpoint overrides"),
 					Section("$Radar Image 2D",
 						Required(StringValue("")),
-						StringValue("Radar color Image 2D"),
-						IntegerValue("Radar Image Size"),
+						StringValue("$Radar color Image 2D"),
+						IntegerValue("$Radar Image Size"),
 						FloatValue("$3D Radar Blip Size Multiplier"),
 					),
 					// TODO: Support "Ship IFF Colours" alias
